@@ -1,0 +1,204 @@
+package main
+
+import (
+	"context"
+	"log"
+	"os"
+	"time"
+	"fmt"
+
+	"google.golang.org/grpc/credentials/insecure"
+
+	franklinpb "franklin/proto/franklin/proto"
+	lesterpb "lester/proto/lester/proto"
+	trevorpb "trevor/proto/trevor/proto"
+
+	"google.golang.org/grpc"
+)
+
+func mustDialEnv(envName, def string) *grpc.ClientConn {
+	addr := os.Getenv(envName)
+	if addr == "" {
+		addr = def
+	}
+	cc, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Fatalf("dial %s: %v", addr, err)
+	}
+	return cc
+}
+
+func main() {
+	lcc := mustDialEnv("LESTER_ADDR", "localhost:50051")
+	defer lcc.Close()
+	fcc := mustDialEnv("FRANKLIN_ADDR", "localhost:50052")
+	defer fcc.Close()
+	tcc := mustDialEnv("TREVOR_ADDR", "localhost:50053")
+	defer tcc.Close()
+
+	lester := lesterpb.NewLesterServiceClient(lcc)
+	franklin := franklinpb.NewCrewServiceClient(fcc)
+	trevor := trevorpb.NewCrewServiceClient(tcc)
+
+	ctx := context.Background()
+	choice := 0 // 0=trevor 1=franklin
+
+	var offer *lesterpb.OfferReply
+
+	// Fase 1
+	for {
+		o, err := lester.GetOffer(ctx, &lesterpb.OfferRequest{Team: "Michael"})
+		if err != nil {
+			log.Fatalf("GetOffer: %v", err)
+		}
+		if !o.HasOffer {
+			log.Println("No hay oferta, reintentando...")
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		if o.PoliceRisk < 80 {
+			_, _ = lester.NotifyDecision(ctx, &lesterpb.Decision{Accepted: true})
+			offer = o
+			log.Printf("Oferta aceptada: base=%d F=%d T=%d riesgo=%d",
+				o.BaseLoot, o.ProbFranklin, o.ProbTrevor, o.PoliceRisk)
+			break
+		} else {
+			log.Printf("Oferta rechazada: riesgo=%d", o.PoliceRisk)
+			_, _ = lester.NotifyDecision(ctx, &lesterpb.Decision{Accepted: false})
+		}
+	}
+
+	log.Printf("Fase 1 completada, oferta final: %+v", offer)
+
+	// Fase 2
+	if offer.ProbFranklin >= offer.ProbTrevor {
+		choice = 1
+		log.Printf("[Michael] Enviando a Franklin (prob=%d)...", offer.ProbFranklin)
+		_, _ = franklin.StartDistraction(ctx, &franklinpb.StartDistractionReq{Prob: offer.ProbFranklin})
+		for {
+			st, _ := franklin.QueryStatus(ctx, &franklinpb.StatusReq{})
+			log.Printf("[Michael] Franklin turno=%d estado=%v", st.TurnsDone, st.State)
+			if st.State == franklinpb.PhaseState_SUCCESS {
+				log.Println("[Michael] Distracción exitosa por Franklin")
+				break
+			}
+			if st.State == franklinpb.PhaseState_FAIL {
+				log.Printf("[Michael] Distracción fallida por Franklin (%s)", st.FailReason)
+				reporte := fmt.Sprintf(
+					"====== REPORTE FINAL DE LA MISIÓN ======\n"+
+						"Resultado: FRACASO\n"+
+						"Fase: Distracción\n"+
+						"Responsable: Franklin\n"+
+						"Botín ganado: $0\n"+
+						"Motivo: %s\n"+
+						"======================================\n",
+					st.FailReason,
+				)
+				err := os.WriteFile("Reporte.txt", []byte(reporte), 0644)
+				if err != nil {
+					log.Fatalf("Error al escribir el reporte: %v", err)
+				}
+				log.Println("Reporte generado correctamente: Reporte.txt")
+				//log.Println(reporte)
+				return
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	} else {
+		log.Printf("[Michael] Enviando a Trevor (prob=%d)...", offer.ProbTrevor)
+		_, _ = trevor.StartDistraction(ctx, &trevorpb.StartDistractionReq{Prob: offer.ProbTrevor})
+		for {
+			st, _ := trevor.QueryStatus(ctx, &trevorpb.StatusReq{})
+			log.Printf("[Michael] Trevor turno=%d estado=%v", st.TurnsDone, st.State)
+			if st.State == trevorpb.PhaseState_SUCCESS {
+				log.Println("[Michael] Distracción exitosa por Trevor")
+				break
+			}
+			if st.State == trevorpb.PhaseState_FAIL {
+				log.Printf("[Michael] Distracción fallida por Trevor (%s)", st.FailReason)
+				reporte := fmt.Sprintf(
+					"====== REPORTE FINAL DE LA MISIÓN ======\n"+
+						"Resultado: FRACASO\n"+
+						"Fase: Distracción\n"+
+						"Responsable: Trevor\n"+
+						"Botín ganado: $0\n"+
+						"Motivo: %s\n"+
+						"======================================\n",
+					st.FailReason,
+				)
+				err := os.WriteFile("Reporte.txt", []byte(reporte), 0644)
+				if err != nil {
+					log.Fatalf("Error al escribir el reporte: %v", err)
+				}
+				log.Println("Reporte generado correctamente: Reporte.txt")
+				//log.Println(reporte)
+				return
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+	//fase3
+	var Ackf *franklinpb.Ack
+	var Ackt *trevorpb.Ack
+	if choice == 0 {
+		Ackf, _ = franklin.StartHeist(ctx, &franklinpb.StartHeistReq{Prob: offer.ProbFranklin, PoliceRisk: offer.PoliceRisk, BaseLoot: offer.BaseLoot})
+		log.Printf("[Michael] Golpe finalizado por Franklin: %s", Ackf.Msg)
+		//montoExtra := Ack.ExtraLoot //monto extra ganado por franklin
+	} else {
+		Ackt, _ = trevor.StartHeist(ctx, &trevorpb.StartHeistReq{Prob: offer.ProbTrevor, PoliceRisk: offer.PoliceRisk, BaseLoot: offer.BaseLoot})
+		log.Printf("[Michael] Golpe finalizado por Trevor: %s", Ackt.Msg)
+	}
+
+
+	//fase4
+	var totalLoot int32 = 0
+	if choice == 0 { // Franklin fue al golpe
+		st, _ := franklin.GetLoot(ctx, &franklinpb.Empty{})
+		totalLoot = st.TotalLoot
+	} else { // Trevor fue al golpe
+		st, _ := trevor.GetLoot(ctx, &trevorpb.Empty{})
+		totalLoot = st.TotalLoot
+	}
+	share := totalLoot / 4
+	remainder := totalLoot % 4
+	michaelShare := share
+	franklinShare := share
+	trevorShare := share
+	lesterShare := share + remainder
+
+	reporte := fmt.Sprintf(
+		"====== REPORTE FINAL DE LA MISIÓN ======\n"+
+			"Resultado: %v\n"+
+			"Botín total: $%d\n\n"+
+			"Reparto:\n"+
+			" - Michael:  $%d\n"+
+			" - Franklin: $%d\n"+
+			" - Trevor:   $%d\n"+
+			" - Lester:   $%d\n"+
+			"======================================\n",
+		totalLoot > 0, totalLoot, michaelShare, franklinShare, trevorShare, lesterShare,
+	)
+	_, err := franklin.ConfirmPayment(ctx, &franklinpb.PaymentReq{Amount: franklinShare})
+	if err != nil {
+		log.Fatalf("Error al pagar a Franklin: %v", err)
+	}
+	_, err = trevor.ConfirmPayment(ctx, &trevorpb.PaymentReq{Amount: trevorShare})
+	if err != nil {
+		log.Fatalf("Error al pagar a Trevor: %v", err)
+	}
+	_, err = lester.ConfirmPayment(ctx, &lesterpb.PaymentReq{Amount: lesterShare})
+	if err != nil {
+		log.Fatalf("Error al pagar a Lester: %v", err)
+	}
+	log.Printf("Michael recibió $%d para sí mismo", michaelShare)
+
+
+	err = os.WriteFile("Reporte.txt", []byte(reporte), 0644)
+	if err != nil {
+		log.Fatalf("Error al escribir el reporte: %v", err)
+	}
+	log.Println("Reporte generado correctamente: Reporte.txt")
+	//log.Println(reporte)
+
+}

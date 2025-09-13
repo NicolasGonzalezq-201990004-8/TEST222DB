@@ -1,0 +1,59 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks: [heist]
+
+  lester:
+    build: ./lester            # forma corta (no pongas dockerfile aquí)
+    container_name: lester
+    ports: ["50051:50051"]
+    networks: [heist]
+    depends_on: 
+      rabbitmq:
+        condition: service_healthy
+
+  franklin:
+    build: ./franklin          # forma corta
+    container_name: franklin
+    ports: ["50052:50052"]
+    networks: [heist]
+    depends_on: 
+      rabbitmq:
+        condition: service_healthy
+
+  trevor:
+    build: ./trevor            # forma corta
+    container_name: trevor
+    ports: ["50053:50053"]
+    networks: [heist]
+    depends_on: 
+      rabbitmq:
+        condition: service_healthy
+
+  michael:
+    build:
+      context: .               # necesita ver todo el repo por los replace
+      dockerfile: ./michael/Dockerfile   # aquí sí va dockerfile (dentro de build)
+    container_name: michael
+    depends_on: [lester, franklin, trevor]
+    environment:
+      LESTER_ADDR: "lester:50051"
+      FRANKLIN_ADDR: "franklin:50052"
+      TREVOR_ADDR: "trevor:50053"
+    networks: [heist]
+    volumes:
+      - ./Reporte.txt:/Reporte.txt
+
+networks:
+  heist:
+    driver: bridge

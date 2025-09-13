@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package lester;
+option go_package = "lester/proto;lesterpb";
+
+// ===== Mensajes =====
+message OfferRequest { string team = 1; }
+
+message OfferReply {
+  bool  has_offer     = 1;
+  int32 base_loot     = 2;
+  int32 prob_franklin = 3;
+  int32 prob_trevor   = 4;
+  int32 police_risk   = 5;
+}
+
+message Decision { 
+  bool accepted = 1; 
+}
+message Ack { string msg = 1; }
+
+// (Fase 3/4 – si las usas)
+message RiskReq {}
+message RiskReply {
+  int32 police_risk = 1;
+}
+message StarsCtrl   { string agent = 1; int32 police_risk = 2; }
+message PaymentReq  { int32 amount = 1; }
+message PaymentReply{ bool ok = 1; string response = 2; }
+
+// ===== Servicio =====
+service LesterService {
+  rpc GetOffer        (OfferRequest) returns (OfferReply);
+  rpc NotifyDecision  (Decision)     returns (Ack);
+  // Para fases siguientes (si las implementas):
+  rpc QueryPoliceRisk(RiskReq) returns (RiskReply);
+  rpc StartStars      (StarsCtrl)    returns (Ack);
+  rpc StopStars       (StarsCtrl)    returns (Ack);
+  rpc ConfirmPayment  (PaymentReq)   returns (PaymentReply);
+}

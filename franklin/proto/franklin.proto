@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package franklin;
+option go_package = "franklin/proto;franklinpb";
+
+message StartDistractionReq { int32 prob = 1; }
+message StartHeistReq {
+  int32 prob = 1;
+  int32 police_risk = 2;
+  int32 base_loot = 3;
+}
+message StatusReq {}
+
+enum PhaseState {
+  WAITING = 0;
+  RUNNING = 1;
+  SUCCESS = 2;
+  FAIL = 3;
+}
+
+message StatusReply {
+  PhaseState state = 1;
+  string fail_reason = 2;
+  int32 turns_done = 3;
+  int32 stars = 4;
+  int32 extra_loot = 5;
+}
+
+message Empty {}
+message LootReply { int32 total_loot = 1; }
+
+message Ack { 
+  string msg = 1;
+  int32 ExtraLoot = 2;
+ }
+message PaymentReq { int32 amount = 1; }
+message PaymentReply { bool ok = 1; string response = 2; }
+
+service CrewService {
+  rpc StartDistraction(StartDistractionReq) returns (Ack);
+  rpc StartHeist(StartHeistReq) returns (Ack);
+  rpc QueryStatus(StatusReq) returns (StatusReply);
+  rpc GetLoot(Empty) returns (LootReply);
+  rpc ConfirmPayment(PaymentReq) returns (PaymentReply);
+}

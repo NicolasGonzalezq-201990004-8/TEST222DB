@@ -1,0 +1,10 @@
+====== REPORTE FINAL DE LA MISIÓN ======
+Resultado: true
+Botín total: $123304
+
+Reparto:
+ - Michael:  $30826
+ - Franklin: $30826
+ - Trevor:   $30826
+ - Lester:   $30826
+======================================
