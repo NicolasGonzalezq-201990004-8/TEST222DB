@@ -1,14 +1,10 @@
 version: "3.8"
-
 services:
   franklin:
+    build: .
     container_name: franklin
-    build:
-      context: .
-      dockerfile: Dockerfile
     environment:
-      AMQP_URL: "amqp://${AMQP_USER}:${AMQP_PASS}@${VM1_IP}:${AMQP_PORT}/"
-      FRANKLIN_PORT: "${FRANKLIN_PORT:-50052}"
+      AMQP_URL: "amqp://heist:heist123@10.35.168.15:5673/"
+      FRANKLIN_PORT: "50052"
     ports:
-      - "${FRANKLIN_PORT:-50052}:${FRANKLIN_PORT:-50052}"
-    restart: unless-stopped
+      - "50052:50052"
