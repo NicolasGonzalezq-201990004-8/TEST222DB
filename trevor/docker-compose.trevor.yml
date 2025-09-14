@@ -8,7 +8,7 @@ services:
       dockerfile: Dockerfile
     environment:
       AMQP_URL: "amqp://heist:heist123@10.35.168.15:5673/"
-      FRANKLIN_PORT: "50052"
+      FRANKLIN_PORT: "50053"
     ports:
-      - "50052:50052"
+      - "50053:50053"
     restart: unless-stopped
