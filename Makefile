@@ -29,16 +29,11 @@ network:
 # ==== RabbitMQ ====
 rabbit:
 	- docker rm -f $(RABBIT_NAME) >/dev/null 2>&1 || true
-	# borro volúmenes viejos si quedaron
 	- docker volume rm $$(docker volume ls -q | grep -Ei 'rabbit|mq' || true) >/dev/null 2>&1 || true
 	docker run -d --name $(RABBIT_NAME) --network $(NET) \
-	  --publish=$(RABBIT_PORT_EXT):5672 \
-	  --publish=$(RABBIT_MGMT_PORT_EXT):15672 \
-	  --health-cmd="rabbitmq-diagnostics -q check_running" \
-	  --health-interval=5s --health-timeout=5s --health-retries=60 \
-	  -e RABBITMQ_DEFAULT_USER=$(AMQP_USER) \
-	  -e RABBITMQ_DEFAULT_PASS=$(AMQP_PASS) \
-	  $(RABBIT_IMG)
+	 -p $(RABBIT_PORT_EXT):5672 -p $(RABBIT_MGMT_PORT_EXT):15672 \
+	 -e RABBITMQ_DEFAULT_USER=$(AMQP_USER) -e RABBITMQ_DEFAULT_PASS=$(AMQP_PASS) \
+	 $(RABBIT_IMG)
 
 rabbit-wait:
 	@echo "Esperando a RabbitMQ (healthcheck)…"
