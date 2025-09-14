@@ -1,15 +1,18 @@
-COMPOSE = docker-compose -f docker-compose.trevor.yml
+COMPOSE ?= docker-compose
+FILE    ?= docker-compose.trevor.yml
+AMQP    ?= amqp://heist:heist123@10.35.168.15:5673/
+
+build:
+	$(COMPOSE) -f $(FILE) build
 
 up:
-	$(COMPOSE) up -d --build
+	AMQP_URL='$(AMQP)' $(COMPOSE) -f $(FILE) up -d --build
 
 logs:
-	$(COMPOSE) logs -f trevor
-
-down:
-	$(COMPOSE) down
+	$(COMPOSE) -f $(FILE) logs -f
 
 ps:
-	$(COMPOSE) ps
+	$(COMPOSE) -f $(FILE) ps
 
-reup: down up
+down:
+	$(COMPOSE) -f $(FILE) down -v
