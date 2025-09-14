@@ -1,14 +1,14 @@
 
 version: "3.8"
 services:
-  trevor:
+  franklin:
+    container_name: trevor
     build:
       context: .
-    container_name: trevor
+      dockerfile: Dockerfile
     environment:
-      - AMQP_URL=${AMQP_URL}
-      - TREVOR_PORT=${TREVOR_PORT:-50053}
+      AMQP_URL: "amqp://heist:heist123@10.35.168.15:5673/"
+      FRANKLIN_PORT: "50052"
     ports:
-      - "${TREVOR_PORT:-50053}:50053"
+      - "50052:50052"
     restart: unless-stopped
-
