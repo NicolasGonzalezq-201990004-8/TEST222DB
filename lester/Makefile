@@ -1,4 +1,3 @@
-cat > ~/V1/lester/Makefile <<'EOF'
 COMPOSE ?= docker-compose
 YML     ?= compose.lester.yml
 
@@ -18,4 +17,4 @@ down:
 
 ps:
 	$(COMPOSE) -f $(YML) ps
-EOF
+
