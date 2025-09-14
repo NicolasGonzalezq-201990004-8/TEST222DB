@@ -1,10 +1,13 @@
 version: "3.8"
 services:
   franklin:
-    build: .
     container_name: franklin
+    build:
+      context: .
+      dockerfile: Dockerfile
     environment:
       AMQP_URL: "amqp://heist:heist123@10.35.168.15:5673/"
       FRANKLIN_PORT: "50052"
     ports:
       - "50052:50052"
+    restart: unless-stopped
