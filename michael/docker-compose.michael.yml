@@ -1,9 +1,9 @@
-version: "3.8"
 services:
   michael:
     build:
-      context: ..               
-      dockerfile: ./michael/Dockerfile
+      context: .
+      dockerfile: ./Dockerfile
+    image: michael:lab
     container_name: michael
     environment:
       LESTER_ADDR: "10.35.168.15:50051"
