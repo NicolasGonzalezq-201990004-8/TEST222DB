@@ -1,29 +1,24 @@
-# ====== VM2: Franklin ======
-VM1_IP     ?= 10.35.168.15
-AMQP_PORT  ?= 5673
-AMQP_USER  ?= heist
-AMQP_PASS  ?= heist123
-
-IMAGE      ?= franklin:lab
-NAME       ?= franklin
-GRPC_PORT  ?= 50052
+cat > Makefile <<'EOF'
+COMPOSE_FILE := docker-compose.franklin.yml
+DC := docker-compose -f $(COMPOSE_FILE)
 
 build:
-	docker build -t $(IMAGE) ./franklin
+	$(DC) build
 
-up: stop build
-	docker run -d --name $(NAME) \
-	  -e AMQP_URL=amqp://$(AMQP_USER):$(AMQP_PASS)@$(VM1_IP):$(AMQP_PORT)/ \
-	  -e FRANKLIN_PORT=$(GRPC_PORT) \
-	  -p $(GRPC_PORT):$(GRPC_PORT) \
-	  $(IMAGE)
+up: stop
+	$(DC) up -d
 
 logs:
-	docker logs -f $(NAME)
+	$(DC) logs -f
 
-inspect-env:
-	docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' $(NAME) | grep AMQP_URL || true
+ps:
+	$(DC) ps
 
 stop:
-	- docker rm -f $(NAME)
+	- $(DC) down
+	- docker rm -f franklin 2>/dev/null || true
 
+inspect-env:
+	docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' franklin | grep AMQP_URL || true
+
+EOF
