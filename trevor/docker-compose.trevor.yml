@@ -3,7 +3,7 @@ version: "3.8"
 services:
   trevor:
     build:
-      context: ./trevor
+      context: .
     container_name: trevor
     environment:
       - AMQP_URL=${AMQP_URL}
