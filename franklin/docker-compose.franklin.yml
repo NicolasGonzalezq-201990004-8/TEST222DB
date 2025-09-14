@@ -4,7 +4,7 @@ services:
     build: .
     container_name: franklin
     environment:
-      AMQP_URL: "amqp://heist:heist123@10.35.168.15:5673/"
+      AMQP_URL: "amqp://heist:heist123@10.35.168.15:5672/"
       FRANKLIN_PORT: "50052"
     ports:
       - "50052:50052"
