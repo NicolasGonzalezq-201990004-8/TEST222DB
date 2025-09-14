@@ -1,65 +1,71 @@
-SHELL := /bin/bash
-
-# --- Red y RabbitMQ ---
+# ==== Parámetros ====
 NET                  ?= heistnet
+
 RABBIT_IMG           ?= rabbitmq:3.13-management
 RABBIT_NAME          ?= rabbitmq
-RABBIT_PORT_EXT      ?= 5673     # expuesto hacia otras VMs
-RABBIT_MGMT_PORT_EXT ?= 15673
+RABBIT_PORT_EXT      ?= 5673    # puerto HOST para AMQP (mapea al 5672 del contenedor)
+RABBIT_MGMT_PORT_EXT ?= 15673   # puerto HOST para UI (mapea al 15672 del contenedor)
 AMQP_USER            ?= heist
 AMQP_PASS            ?= heist123
 
-# --- Lester ---
-LESTER_NAME ?= lester
-LESTER_IMG  ?= lester:lab
-LESTER_PORT ?= 50051
+LESTER_DIR           ?= ./lester
+LESTER_IMG           ?= lester:lab
+LESTER_NAME          ?= lester
+LESTER_PORT          ?= 50051
 
-AMQP_URL_DOCKER := amqp://$(AMQP_USER):$(AMQP_PASS)@$(RABBIT_NAME):5672/
+# URL que usará Lester DENTRO de la red Docker
+AMQP_URL             := amqp://$(AMQP_USER):$(AMQP_PASS)@$(RABBIT_NAME):5672/
 
-.PHONY: up network rabbit rabbit-wait lester-build lester-run ps logs logs-lester logs-rabbit stop clean env
+.PHONY: up network rabbit rabbit-wait rabbit-user lester-build lester-run ps logs logs-rabbit logs-lester stop clean env
 
-up: network rabbit rabbit-wait lester-build lester-run
-	@$(MAKE) ps
+# ==== Orquestación ====
+up: network rabbit rabbit-wait rabbit-user lester-build lester-run ps
+	@echo "✅ RabbitMQ y Lester arriba"
 
+# ==== Red ====
 network:
 	- docker network create $(NET)
 
+# ==== RabbitMQ ====
 rabbit:
 	- docker rm -f $(RABBIT_NAME) >/dev/null 2>&1 || true
+	# borro volúmenes viejos si quedaron
 	- docker volume rm $$(docker volume ls -q | grep -Ei 'rabbit|mq' || true) >/dev/null 2>&1 || true
 	docker run -d --name $(RABBIT_NAME) --network $(NET) \
-	  -p $(RABBIT_PORT_EXT):5672 \
-	  -p $(RABBIT_MGMT_PORT_EXT):15672 \
+	  --publish=$(RABBIT_PORT_EXT):5672 \
+	  --publish=$(RABBIT_MGMT_PORT_EXT):15672 \
+	  --health-cmd="rabbitmq-diagnostics -q check_running" \
+	  --health-interval=5s --health-timeout=5s --health-retries=60 \
 	  -e RABBITMQ_DEFAULT_USER=$(AMQP_USER) \
 	  -e RABBITMQ_DEFAULT_PASS=$(AMQP_PASS) \
 	  $(RABBIT_IMG)
 
 rabbit-wait:
-	@echo "Esperando a RabbitMQ (timeout 90s)…"
-	@set -e; ok=0; \
-	for i in $$(seq 1 45); do \
-	  if docker exec $(RABBIT_NAME) rabbitmq-diagnostics -q check_running >/dev/null 2>&1; then ok=1; break; fi; \
-	  sleep 2; \
-	done; \
-	if [ $$ok -ne 1 ]; then \
-	  echo "RabbitMQ NO arrancó, logs:"; docker logs --tail 200 $(RABBIT_NAME); exit 1; \
-	fi; \
-	echo "Puertos publicados:"; docker port $(RABBIT_NAME); \
-	echo "Usuarios:"; docker exec $(RABBIT_NAME) rabbitmqctl list_users
+	@echo "Esperando a RabbitMQ (healthcheck)…"
+	@until [ "$$(docker inspect -f '{{.State.Health.Status}}' $(RABBIT_NAME) 2>/dev/null)" = "healthy" ]; do \
+	  echo "..."; sleep 2; \
+	done
+	@echo "RabbitMQ OK."
+	@docker port $(RABBIT_NAME)
 
-# Build de Lester (usa ./lester)
+rabbit-user:  # por si quieres re-aplicar permisos (no hace daño)
+	docker exec $(RABBIT_NAME) rabbitmqctl add_user $(AMQP_USER) $(AMQP_PASS) 2>/dev/null || true
+	docker exec $(RABBIT_NAME) rabbitmqctl set_permissions -p / $(AMQP_USER) '.*' '.*' '.*'
+	@echo "Usuario $(AMQP_USER) listo"
+
+# ==== Lester ====
 lester-build:
-	docker build -t $(LESTER_IMG) ./lester
+	docker build --no-cache -t $(LESTER_IMG) $(LESTER_DIR)
 
-# Run de Lester (en la misma red), con AMQP_URL apuntando a rabbitmq:5672 (interno)
 lester-run:
 	- docker rm -f $(LESTER_NAME) >/dev/null 2>&1 || true
 	docker run -d --name $(LESTER_NAME) --network $(NET) \
-	  -e AMQP_URL='$(AMQP_URL_DOCKER)' \
+	  -e AMQP_URL='$(AMQP_URL)' \
 	  -e LESTER_PORT=$(LESTER_PORT) \
 	  -p $(LESTER_PORT):$(LESTER_PORT) \
 	  $(LESTER_IMG)
 
+# ==== Utilidades ====
 ps:
 	docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 
@@ -69,13 +75,12 @@ logs-lester:
 logs-rabbit:
 	docker logs -f $(RABBIT_NAME)
 
+env:
+	- docker exec $(LESTER_NAME) printenv AMQP_URL || true
+
 stop:
 	- docker rm -f $(LESTER_NAME) $(RABBIT_NAME) >/dev/null 2>&1 || true
 
 clean: stop
-	- docker volume rm $$(docker volume ls -q | grep -Ei 'rabbit|mq' || true) >/dev/null 2>&1 || true
 	- docker rmi $(LESTER_IMG) >/dev/null 2>&1 || true
 	- docker network rm $(NET) >/dev/null 2>&1 || true
-
-env:
-	- docker exec $(LESTER_NAME) printenv AMQP_URL || true
