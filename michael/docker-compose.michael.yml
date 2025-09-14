@@ -7,5 +7,5 @@ services:
     container_name: michael
     environment:
       LESTER_ADDR: "10.35.168.15:50051"
-      FRANKLIN_ADDR: "10.35.168.16:50052"
-      TREVOR_ADDR: "10.35.168.17:50053"
+      FRANKLIN_ADDR: "10.35.168.17:50052"
+      TREVOR_ADDR: "10.35.168.16:50053"
