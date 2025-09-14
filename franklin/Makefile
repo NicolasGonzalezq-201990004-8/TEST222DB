@@ -20,5 +20,5 @@ stop:
 inspect-env:
 	docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' franklin | grep AMQP_URL || true
 
-EOF
+
 
