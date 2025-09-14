@@ -1,24 +1,18 @@
-COMPOSE_FILE := docker-compose.franklin.yml
-DC := docker-compose -f $(COMPOSE_FILE)
+COMPOSE ?= docker-compose
+FILE    ?= docker-compose.franklin.yml
+AMQP    ?= amqp://heist:heist123@10.35.168.15:5673/
 
 build:
-	$(DC) build
+	$(COMPOSE) -f $(FILE) build
 
-up: stop
-	$(DC) up -d
+up:
+	AMQP_URL='$(AMQP)' $(COMPOSE) -f $(FILE) up -d --build
 
 logs:
-	$(DC) logs -f
+	$(COMPOSE) -f $(FILE) logs -f
 
 ps:
-	$(DC) ps
+	$(COMPOSE) -f $(FILE) ps
 
-stop:
-	- $(DC) down
-	- docker rm -f franklin 2>/dev/null || true
-
-inspect-env:
-	docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' franklin | grep AMQP_URL || true
-
-
-
+down:
+	$(COMPOSE) -f $(FILE) down -v
