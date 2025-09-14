@@ -17,9 +17,7 @@ import (
 
 func mustEnv(k string) string {
 	v := os.Getenv(k)
-	if v == "" {
-		log.Fatalf("Falta variable de entorno %s", k)
-	}
+	if v == "" { log.Fatalf("Falta variable de entorno %s", k) }
 	return v
 }
 
@@ -30,10 +28,17 @@ func dialBlocking(addr string) *grpc.ClientConn {
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithBlock(),
 	)
-	if err != nil {
-		log.Fatalf("No se pudo conectar a %s: %v", addr, err)
-	}
+	if err != nil { log.Fatalf("No se pudo conectar a %s: %v", addr, err) }
 	return conn
+}
+
+func writeFail(who, reason string) {
+	report := fmt.Sprintf(
+		"====== REPORTE FINAL DE LA MISIÓN ======\n"+
+			"Resultado: FRACASO\nFase: Distracción\nResponsable: %s\nBotín ganado: $0\nMotivo: %s\n"+
+			"======================================\n", who, reason)
+	_ = os.WriteFile("Reporte.txt", []byte(report), 0644)
+	log.Println("Reporte generado correctamente: Reporte.txt")
 }
 
 func main() {
@@ -48,36 +53,24 @@ func main() {
 
 	ctx := context.Background()
 
-	// ===== Fase 1: Negociación =====
+	// ===== Fase 1 =====
 	var offer *lesterpb.OfferReply
 	for {
 		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		o, err := lc.GetOffer(cctx, &lesterpb.OfferRequest{Team: "Michael"})
 		cancel()
-		if err != nil || o == nil {
-			log.Printf("GetOffer error: %v", err)
-			time.Sleep(time.Second)
-			continue
-		}
-		if !o.HasOffer {
-			log.Println("Sin oferta, reintentando…")
-			time.Sleep(time.Second)
-			continue
-		}
+		if err != nil || o == nil { log.Printf("GetOffer: %v", err); time.Sleep(time.Second); continue }
+		if !o.HasOffer { time.Sleep(time.Second); continue }
 		if o.PoliceRisk < 80 {
-			if _, err := lc.NotifyDecision(ctx, &lesterpb.Decision{Accepted: true}); err != nil {
-				log.Printf("NotifyDecision: %v", err)
-			}
+			_, _ = lc.NotifyDecision(ctx, &lesterpb.Decision{Accepted: true})
 			offer = o
-			log.Printf("Oferta aceptada: base=%d F=%d T=%d riesgo=%d",
-				o.BaseLoot, o.ProbFranklin, o.ProbTrevor, o.PoliceRisk)
+			log.Printf("Oferta aceptada: base=%d F=%d T=%d riesgo=%d", o.BaseLoot, o.ProbFranklin, o.ProbTrevor, o.PoliceRisk)
 			break
 		}
-		log.Printf("Oferta rechazada: riesgo=%d", o.PoliceRisk)
 		_, _ = lc.NotifyDecision(ctx, &lesterpb.Decision{Accepted: false})
 	}
 
-	// ===== Fase 2: Distracción =====
+	// ===== Fase 2 =====
 	choice := 0 // 0=Trevor, 1=Franklin
 	if offer.ProbFranklin >= offer.ProbTrevor {
 		choice = 1
@@ -89,19 +82,10 @@ func main() {
 			cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 			st, err := fc.QueryStatus(cctx, &franklinpb.StatusReq{})
 			cancel()
-			if err != nil || st == nil {
-				log.Printf("QueryStatus Franklin: %v", err)
-				time.Sleep(500 * time.Millisecond)
-				continue
-			}
+			if err != nil || st == nil { time.Sleep(500*time.Millisecond); continue }
 			log.Printf("[Michael] Franklin turno=%d estado=%v", st.TurnsDone, st.State)
-			if st.State == franklinpb.PhaseState_SUCCESS {
-				break
-			}
-			if st.State == franklinpb.PhaseState_FAIL {
-				writeFail("Franklin", st.FailReason)
-				return
-			}
+			if st.State == franklinpb.PhaseState_SUCCESS { break }
+			if st.State == franklinpb.PhaseState_FAIL { writeFail("Franklin", st.FailReason); return }
 			time.Sleep(500 * time.Millisecond)
 		}
 	} else {
@@ -113,24 +97,15 @@ func main() {
 			cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 			st, err := tc.QueryStatus(cctx, &trevorpb.StatusReq{})
 			cancel()
-			if err != nil || st == nil {
-				log.Printf("QueryStatus Trevor: %v", err)
-				time.Sleep(500 * time.Millisecond)
-				continue
-			}
+			if err != nil || st == nil { time.Sleep(500*time.Millisecond); continue }
 			log.Printf("[Michael] Trevor turno=%d estado=%v", st.TurnsDone, st.State)
-			if st.State == trevorpb.PhaseState_SUCCESS {
-				break
-			}
-			if st.State == trevorpb.PhaseState_FAIL {
-				writeFail("Trevor", st.FailReason)
-				return
-			}
+			if st.State == trevorpb.PhaseState_SUCCESS { break }
+			if st.State == trevorpb.PhaseState_FAIL { writeFail("Trevor", st.FailReason); return }
 			time.Sleep(500 * time.Millisecond)
 		}
 	}
 
-	// ===== Fase 3: Golpe =====
+	// ===== Fase 3 =====
 	var total int32
 	if choice == 1 { // Franklin
 		ack, err := fc.StartHeist(ctx, &franklinpb.StartHeistReq{
@@ -138,15 +113,10 @@ func main() {
 			PoliceRisk: offer.PoliceRisk,
 			BaseLoot:   offer.BaseLoot,
 		})
-		if err != nil || ack == nil {
-			log.Fatalf("StartHeist Franklin: %v", err)
-		}
+		if err != nil || ack == nil { log.Fatalf("StartHeist Franklin: %v", err) }
 		log.Printf("[Michael] Golpe finalizado por Franklin: %s", ack.Msg)
-
 		rep, err := fc.GetLoot(ctx, &franklinpb.Empty{})
-		if err != nil || rep == nil {
-			log.Fatalf("GetLoot Franklin: %v", err)
-		}
+		if err != nil || rep == nil { log.Fatalf("GetLoot Franklin: %v", err) }
 		total = rep.TotalLoot
 	} else { // Trevor
 		ack, err := tc.StartHeist(ctx, &trevorpb.StartHeistReq{
@@ -154,19 +124,14 @@ func main() {
 			PoliceRisk: offer.PoliceRisk,
 			BaseLoot:   offer.BaseLoot,
 		})
-		if err != nil || ack == nil {
-			log.Fatalf("StartHeist Trevor: %v", err)
-		}
+		if err != nil || ack == nil { log.Fatalf("StartHeist Trevor: %v", err) }
 		log.Printf("[Michael] Golpe finalizado por Trevor: %s", ack.Msg)
-
 		rep, err := tc.GetLoot(ctx, &trevorpb.Empty{})
-		if err != nil || rep == nil {
-			log.Fatalf("GetLoot Trevor: %v", err)
-		}
+		if err != nil || rep == nil { log.Fatalf("GetLoot Trevor: %v", err) }
 		total = rep.TotalLoot
 	}
 
-	// ===== Fase 4: Reparto y pagos =====
+	// ===== Fase 4 =====
 	share := total / 4
 	rem := total % 4
 	michaelShare := share
@@ -174,37 +139,17 @@ func main() {
 	trevorShare := share
 	lesterShare := share + rem
 
-	if _, err := fc.ConfirmPayment(ctx, &franklinpb.PaymentReq{Amount: franklinShare}); err != nil {
-		log.Printf("Pago Franklin: %v", err)
-	}
-	if _, err := tc.ConfirmPayment(ctx, &trevorpb.PaymentReq{Amount: trevorShare}); err != nil {
-		log.Printf("Pago Trevor: %v", err)
-	}
-	if _, err := lc.ConfirmPayment(ctx, &lesterpb.PaymentReq{Amount: lesterShare}); err != nil {
-		log.Printf("Pago Lester: %v", err)
-	}
+	_, _ = fc.ConfirmPayment(ctx, &franklinpb.PaymentReq{Amount: franklinShare})
+	_, _ = tc.ConfirmPayment(ctx, &trevorpb.PaymentReq{Amount: trevorShare})
+	_, _ = lc.ConfirmPayment(ctx, &lesterpb.PaymentReq{Amount: lesterShare})
 
 	report := fmt.Sprintf(
 		"====== REPORTE FINAL DE LA MISIÓN ======\n"+
-			"Resultado: %v\n"+
-			"Botín total: $%d\n\n"+
-			"Reparto:\n"+
+			"Resultado: %v\nBotín total: $%d\n\nReparto:\n"+
 			" - Michael:  $%d\n - Franklin: $%d\n - Trevor:   $%d\n - Lester:   $%d\n"+
 			"======================================\n",
 		total > 0, total, michaelShare, franklinShare, trevorShare, lesterShare,
 	)
-	if err := os.WriteFile("Reporte.txt", []byte(report), 0644); err != nil {
-		log.Printf("No pude escribir Reporte.txt: %v", err)
-	} else {
-		log.Println("Reporte generado correctamente: Reporte.txt")
-	}
-}
-
-func writeFail(who, reason string) {
-	report := fmt.Sprintf(
-		"====== REPORTE FINAL DE LA MISIÓN ======\n"+
-			"Resultado: FRACASO\nFase: Distracción\nResponsable: %s\nBotín ganado: $0\nMotivo: %s\n"+
-			"======================================\n", who, reason)
 	_ = os.WriteFile("Reporte.txt", []byte(report), 0644)
 	log.Println("Reporte generado correctamente: Reporte.txt")
 }
