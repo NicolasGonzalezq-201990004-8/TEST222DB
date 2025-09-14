@@ -5,8 +5,10 @@ LESTER_ADDR   ?= 10.35.168.15:50051
 FRANKLIN_ADDR ?= 10.35.168.17:50052
 TREVOR_ADDR   ?= 10.35.168.16:50053
 
+REPO_ROOT := $(abspath ..)
+
 build:
-	docker build -t $(IMAGE) -f ./Dockerfile .
+	docker build -t $(IMAGE) -f $(REPO_ROOT)/michael/Dockerfile $(REPO_ROOT)
 
 up: stop build
 	docker run -d --name $(NAME) \
@@ -20,4 +22,3 @@ logs:
 
 stop:
 	- docker rm -f $(NAME)
-
