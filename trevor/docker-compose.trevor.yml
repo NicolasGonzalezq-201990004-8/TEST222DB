@@ -1,0 +1,14 @@
+
+version: "3.8"
+services:
+  trevor:
+    build:
+      context: ./trevor
+    container_name: trevor
+    environment:
+      - AMQP_URL=${AMQP_URL}
+      - TREVOR_PORT=${TREVOR_PORT:-50053}
+    ports:
+      - "${TREVOR_PORT:-50053}:50053"
+    restart: unless-stopped
+
