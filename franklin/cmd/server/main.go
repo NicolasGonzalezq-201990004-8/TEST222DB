@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"math/rand"
 	"net"
@@ -9,12 +10,9 @@ import (
 	"strconv"
 	"sync"
 	"time"
-	"fmt"
-	
+
 	"github.com/streadway/amqp"
-
 	franklinpb "franklin/proto/franklin/proto"
-
 	"google.golang.org/grpc"
 )
 
@@ -26,23 +24,34 @@ type franklinServer struct {
 	totalLoot   int32
 }
 
-var amqpConn *amqp.Connection
-var amqpCh *amqp.Channel
+var (
+	amqpConn *amqp.Connection
+	amqpCh   *amqp.Channel
+	amqpURL  string
+)
 
-func connectRabbit() (*amqp.Connection, *amqp.Channel) {
-	conn, err := amqp.Dial("amqp://guest:guest@rabbitmq:5672/")
+func connectRabbit(url string) (*amqp.Connection, *amqp.Channel) {
+	conn, err := amqp.Dial(url)
 	if err != nil {
-		log.Fatalf("No se pudo conectar a RabbitMQ: %v", err)
-
+		log.Fatalf("No se pudo conectar a RabbitMQ (%s): %v", url, err)
 	}
-
 	ch, err := conn.Channel()
 	if err != nil {
 		log.Fatalf("No se pudo abrir el canal: %v", err)
 	}
-
 	return conn, ch
 }
+
+func initRabbit() {
+	amqpURL = os.Getenv("AMQP_URL")
+	if amqpURL == "" {
+		amqpURL = "amqp://guest:guest@rabbitmq:5672/"
+	}
+	amqpConn, amqpCh = connectRabbit(amqpURL)
+	log.Printf("[RabbitMQ] Conexión y canal inicializados a %s", amqpURL)
+}
+
+/* ===== Fase 2 ===== */
 
 func (s *franklinServer) StartDistraction(ctx context.Context, r *franklinpb.StartDistractionReq) (*franklinpb.Ack, error) {
 	s.mu.Lock()
@@ -54,14 +63,11 @@ func (s *franklinServer) StartDistraction(ctx context.Context, r *franklinpb.Sta
 
 	for t := 1; t <= s.turnsNeeded; t++ {
 		time.Sleep(TurnDuration())
-
 		s.mu.Lock()
 		s.state.TurnsDone = int32(t)
 		s.mu.Unlock()
-
 		log.Printf("[Franklin] Turno %d/%d", t, s.turnsNeeded)
 
-		// evento a la mitad (10% de fallar)
 		if t == s.turnsNeeded/2 && RandomPct(10) {
 			s.mu.Lock()
 			s.state.State = franklinpb.PhaseState_FAIL
@@ -86,33 +92,30 @@ func (s *franklinServer) QueryStatus(ctx context.Context, _ *franklinpb.StatusRe
 	return &copy, nil
 }
 
+/* ===== Fase 3 ===== */
+
 func (s *franklinServer) StartHeist(ctx context.Context, r *franklinpb.StartHeistReq) (*franklinpb.Ack, error) {
 	s.mu.Lock()
 	s.state = franklinpb.StatusReply{State: franklinpb.PhaseState_RUNNING}
 	s.turnsNeeded = TurnsNeeded(r.Prob)
 	s.totalLoot = r.BaseLoot
 	s.mu.Unlock()
+
 	log.Printf("[Franklin] Iniciando golpe, turnos=%d", s.turnsNeeded)
 
 	starsCh := make(chan int)
-	var habilidad bool
 	failCh := make(chan string, 1)
-	go func() {
-		subscribeLesterStars("Franklin", starsCh)
-	}()
+	habilidad := false
+
+	go subscribeLesterStars("Franklin", starsCh)
 	go func() {
 		for stars := range starsCh {
 			switch {
-			case stars == 3:
-				if !habilidad {
-					log.Printf("[Franklin] franklin activa su habilidad especial: Chop (¡Cada turno siguiente añadirá $1000 al botín!)")
-					habilidad = true
-				}
+			case stars == 3 && !habilidad:
+				log.Printf("[Franklin] Habilidad especial: Chop (+$1000/turno)")
+				habilidad = true
 			case stars >= 5:
-				select {
-				case failCh <- "Franklin acumuló demasiadas estrellas":
-				default:
-				}
+				select { case failCh <- "Franklin acumuló demasiadas estrellas": default: }
 				return
 			}
 		}
@@ -127,158 +130,106 @@ func (s *franklinServer) StartHeist(ctx context.Context, r *franklinpb.StartHeis
 			s.state.FailReason = reason
 			s.mu.Unlock()
 			publishCrewTurn("franklin", -1)
-			log.Printf("[Franklin] Falló el golpe: %s", s.state.FailReason)
+			log.Printf("[Franklin] Falló el golpe: %s", reason)
 			return &franklinpb.Ack{Msg: "Golpe fallido"}, nil
 		default:
 		}
+
 		publishCrewTurn("franklin", t)
+
 		if habilidad {
-			s.totalLoot += 1000
 			s.mu.Lock()
+			s.totalLoot += 1000
 			s.state.ExtraLoot += 1000
 			s.mu.Unlock()
 			log.Printf("[Franklin] Chop recuperó $1000, totalLoot=$%d", s.totalLoot)
 		}
+
 		time.Sleep(TurnDuration())
 		s.mu.Lock()
 		s.state.TurnsDone = int32(t)
 		s.mu.Unlock()
 		log.Printf("[Franklin] Turno %d/%d", t, s.turnsNeeded)
 	}
+
 	s.mu.Lock()
 	s.state.State = franklinpb.PhaseState_SUCCESS
 	s.mu.Unlock()
 	publishCrewTurn("franklin", -1)
 	log.Printf("[Franklin] Golpe completado con éxito. Botín final = %d", s.totalLoot)
-	return &franklinpb.Ack{
-		Msg:       "Golpe completado con éxito",
-		ExtraLoot: s.state.ExtraLoot,
-	}, nil
+
+	return &franklinpb.Ack{Msg: "Golpe completado con éxito", ExtraLoot: s.state.ExtraLoot}, nil
 }
 
-
-//4
 func (s *franklinServer) GetLoot(ctx context.Context, _ *franklinpb.Empty) (*franklinpb.LootReply, error) {
 	s.mu.Lock()
-    defer s.mu.Unlock()
-    return &franklinpb.LootReply{TotalLoot: s.totalLoot}, nil
-
+	defer s.mu.Unlock()
+	return &franklinpb.LootReply{TotalLoot: s.totalLoot}, nil
 }
 
 func (s *franklinServer) ConfirmPayment(ctx context.Context, p *franklinpb.PaymentReq) (*franklinpb.PaymentReply, error) {
 	s.mu.Lock()
-	log.Printf("[Franklin]  Excelente! El pago es correcto. $%d", p.Amount)
 	defer s.mu.Unlock()
-	return &franklinpb.PaymentReply{
-		Ok:       true,
-		Response: fmt.Sprintf(" Excelente ! El pago es correcto. $%d", p.Amount),
-	}, nil
+	log.Printf("[Franklin] Excelente! Pago correcto: $%d", p.Amount)
+	return &franklinpb.PaymentReply{Ok: true, Response: fmt.Sprintf("Excelente! El pago es correcto. $%d", p.Amount)}, nil
 }
 
-
-
 func subscribeLesterStars(clientName string, starsCh chan<- int) {
-	exchangeName := "stars_exchange"
+	const exchangeName = "stars_exchange"
 	if err := amqpCh.ExchangeDeclare(exchangeName, "fanout", true, false, false, false, nil); err != nil {
 		log.Fatalf("Error declarando exchange %s: %v", exchangeName, err)
 	}
-	q, err := amqpCh.QueueDeclare(
-		"",    //nombre vacío
-		false, //durable
-		true,  //auto-delete
-		true,  //exclusive
-		false, //no-wait
-		nil,
-	)
+	q, err := amqpCh.QueueDeclare("", false, true, true, false, nil)
 	if err != nil {
 		log.Fatalf("Error declarando cola temporal: %v", err)
 	}
-
-	err = amqpCh.QueueBind(
-		q.Name,
-		"",
-		exchangeName,
-		false,
-		nil,
-	)
-	if err != nil {
+	if err := amqpCh.QueueBind(q.Name, "", exchangeName, false, nil); err != nil {
 		log.Fatalf("Error haciendo bind de la cola: %v", err)
 	}
-
-	msgs, err := amqpCh.Consume(
-		q.Name,
-		"",
-		true,
-		false,
-		false,
-		false,
-		nil,
-	)
+	msgs, err := amqpCh.Consume(q.Name, "", true, false, false, false, nil)
 	if err != nil {
 		log.Fatalf("Error consumiendo mensajes: %v", err)
 	}
 
-	log.Printf("[%s] Suscrito a estrellas de Lester", clientName)
+	log.Printf("[%s] Suscrito a estrellas de Lester (exchange=%s, queue=%s)", clientName, exchangeName, q.Name)
 
 	go func() {
 		for d := range msgs {
 			stars, err := strconv.Atoi(string(d.Body))
 			if err != nil {
-				log.Printf("[Trevor] Error convirtiendo estrellas: %v", err)
+				log.Printf("[Franklin] Error convirtiendo estrellas: %v", err)
 				continue
 			}
 			if stars == -1 {
-				log.Printf("[Franklin] Fin del golpe")
+				log.Printf("[Franklin] Fin del golpe (señal -1)")
 				close(starsCh)
 				return
 			}
-			log.Printf("[%s] Estado estrellas actual según Lester: %s", clientName, d.Body)
+			log.Printf("[%s] Estrellas = %d", clientName, stars)
 			starsCh <- stars
 		}
 	}()
 }
 
 func publishCrewTurn(member string, turn int) {
-	exchangeName := "turns_exchange"
-
-	err := amqpCh.ExchangeDeclare(
-		exchangeName,
-		"fanout",
-		true,
-		false,
-		false,
-		false,
-		nil,
-	)
-	if err != nil {
+	const exchangeName = "turns_exchange"
+	if err := amqpCh.ExchangeDeclare(exchangeName, "fanout", true, false, false, false, nil); err != nil {
 		log.Fatalf("Error creando exchange %s: %v", exchangeName, err)
 	}
 	body := strconv.Itoa(turn)
-
-	err = amqpCh.Publish(
-		exchangeName,
-		"",
-		false,
-		false,
-		amqp.Publishing{
-			ContentType: "text/plain",
-			Body:        []byte(body),
-		},
-	)
-	if err != nil {
-		log.Printf("[%s] Error publicando turnos en %s: %v", member, member, err)
+	if err := amqpCh.Publish(exchangeName, "", false, false, amqp.Publishing{
+		ContentType: "text/plain",
+		Body:        []byte(body),
+	}); err != nil {
+		log.Printf("[%s] Error publicando turno en %s: %v", member, exchangeName, err)
 	} else {
 		log.Printf("[%s] Notificando turno %d a Lester", member, turn)
 	}
 }
 
-func initRabbit() {
-	var _ error
-	amqpConn, amqpCh = connectRabbit()
-	log.Printf("[RabbitMQ] Conexión y canal inicializados")
-}
-
 func main() {
+	initRabbit()
+
 	port := os.Getenv("FRANKLIN_PORT")
 	if port == "" {
 		port = "50052"
@@ -287,40 +238,28 @@ func main() {
 	if err != nil {
 		log.Fatalf("listen: %v", err)
 	}
-	initRabbit()
 	grpcServer := grpc.NewServer()
 	franklinpb.RegisterCrewServiceServer(grpcServer, &franklinServer{})
+
+	log.Printf("[Franklin] AMQP_URL=%s", amqpURL)
 	log.Printf("[Franklin] gRPC escuchando en :%s", port)
 	if err := grpcServer.Serve(lis); err != nil {
 		log.Fatal(err)
 	}
 
-	//cerramos los canales y conexiones RabbitMQ
-	amqpCh.Close()
-	amqpConn.Close()
-
+	_ = amqpCh.Close()
+	_ = amqpConn.Close()
 }
 
+/* util */
 func TurnsNeeded(prob int32) int {
-	if prob < 0 {
-		prob = 0
-	}
-	if prob > 200 {
-		prob = 200
-	}
+	if prob < 0 { prob = 0 }
+	if prob > 200 { prob = 200 }
 	return int(200 - prob)
 }
-
-func TurnDuration() time.Duration {
-	return 80 * time.Millisecond
-}
-
+func TurnDuration() time.Duration { return 80 * time.Millisecond }
 func RandomPct(p int) bool {
-	if p <= 0 {
-		return false
-	}
-	if p >= 100 {
-		return true
-	}
+	if p <= 0 { return false }
+	if p >= 100 { return true }
 	return rand.Intn(100) < p
 }
