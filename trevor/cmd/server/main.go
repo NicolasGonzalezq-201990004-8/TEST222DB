@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"math/rand"
 	"net"
@@ -9,12 +10,9 @@ import (
 	"strconv"
 	"sync"
 	"time"
-	"fmt"
 
 	"github.com/streadway/amqp"
-
 	trevorpb "trevor/proto/trevor/proto"
-
 	"google.golang.org/grpc"
 )
 
@@ -26,22 +24,36 @@ type trevorServer struct {
 	totalLoot   int32
 }
 
-var amqpConn *amqp.Connection
-var amqpCh *amqp.Channel
+var (
+	amqpConn *amqp.Connection
+	amqpCh   *amqp.Channel
+	amqpURL  string
+)
 
-func connectRabbit() (*amqp.Connection, *amqp.Channel) {
-	conn, err := amqp.Dial("amqp://guest:guest@rabbitmq:5672/")
-	if err != nil {
-		log.Fatalf("No se pudo conectar a RabbitMQ: %v", err)
-
+func mustConnectRabbit(url string) (*amqp.Connection, *amqp.Channel) {
+	const maxRetries = 30
+	const backoff = 2 * time.Second
+	for i := 1; i <= maxRetries; i++ {
+		conn, err := amqp.Dial(url)
+		if err == nil {
+			ch, err := conn.Channel()
+			if err == nil {
+				return conn, ch
+			}
+			_ = conn.Close()
+			log.Printf("[RabbitMQ] error canal: %v (retry %d/%d)", err, i, maxRetries)
+		} else {
+			log.Printf("[RabbitMQ] no conecta: %v (retry %d/%d)", err, i, maxRetries)
+		}
+		time.Sleep(backoff)
 	}
+	log.Fatalf("[RabbitMQ] imposible conectar a %s", url)
+	return nil, nil
+}
 
-	ch, err := conn.Channel()
-	if err != nil {
-		log.Fatalf("No se pudo abrir el canal: %v", err)
-	}
-
-	return conn, ch
+func initRabbit(url string) {
+	amqpConn, amqpCh = mustConnectRabbit(url)
+	log.Printf("[RabbitMQ] conectado a %s", url)
 }
 
 func (s *trevorServer) StartDistraction(ctx context.Context, r *trevorpb.StartDistractionReq) (*trevorpb.Ack, error) {
@@ -54,14 +66,11 @@ func (s *trevorServer) StartDistraction(ctx context.Context, r *trevorpb.StartDi
 
 	for t := 1; t <= s.turnsNeeded; t++ {
 		time.Sleep(TurnDuration())
-
 		s.mu.Lock()
 		s.state.TurnsDone = int32(t)
 		s.mu.Unlock()
-
 		log.Printf("[Trevor] Turno %d/%d", t, s.turnsNeeded)
-
-		if t == s.turnsNeeded/2 && RandomPct(10) { // <-- helper local
+		if t == s.turnsNeeded/2 && RandomPct(10) {
 			s.mu.Lock()
 			s.state.State = trevorpb.PhaseState_FAIL
 			s.state.FailReason = "Trevor se emborrachó"
@@ -70,7 +79,6 @@ func (s *trevorServer) StartDistraction(ctx context.Context, r *trevorpb.StartDi
 			return &trevorpb.Ack{Msg: "Distracción fallida"}, nil
 		}
 	}
-
 	s.mu.Lock()
 	s.state.State = trevorpb.PhaseState_SUCCESS
 	s.mu.Unlock()
@@ -78,7 +86,7 @@ func (s *trevorServer) StartDistraction(ctx context.Context, r *trevorpb.StartDi
 	return &trevorpb.Ack{Msg: "Distracción completada"}, nil
 }
 
-func (s *trevorServer) QueryStatus(ctx context.Context, _ *trevorpb.StatusReq) (*trevorpb.StatusReply, error) {
+func (s *trevorServer) QueryStatus(context.Context, *trevorpb.StatusReq) (*trevorpb.StatusReply, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	copy := s.state
@@ -91,29 +99,24 @@ func (s *trevorServer) StartHeist(ctx context.Context, r *trevorpb.StartHeistReq
 	s.turnsNeeded = TurnsNeeded(r.Prob)
 	s.totalLoot = r.BaseLoot
 	s.mu.Unlock()
+
 	log.Printf("[Trevor] Iniciando golpe, turnos=%d", s.turnsNeeded)
 
 	starsCh := make(chan int)
 	failCh := make(chan string, 1)
-
-	go func() {
-		subscribeLesterStars("Trevor", starsCh)
-	}()
-
+	go subscribeLesterStars("Trevor", starsCh)
 	go func() {
 		for stars := range starsCh {
 			switch {
 			case stars == 5:
-				log.Printf("[Trevor] Trevor activa su habilidad especial: Furia (¡Limite de fracaso aumentado a 7 estrellas!)")
+				log.Printf("[Trevor] Habilidad: Furia (límite sube a 7★)")
 			case stars >= 7:
-				select {
-				case failCh <- "Trevor acumuló demasiadas estrellas":
-				default: // evita bloqueo si ya se mandó fail
-				}
+				select { case failCh <- "Trevor acumuló demasiadas estrellas": default: }
 				return
 			}
 		}
 	}()
+
 	for t := 1; t <= s.turnsNeeded; t++ {
 		select {
 		case reason := <-failCh:
@@ -123,7 +126,7 @@ func (s *trevorServer) StartHeist(ctx context.Context, r *trevorpb.StartHeistReq
 			s.state.FailReason = reason
 			s.mu.Unlock()
 			publishCrewTurn("trevor", -1)
-			log.Printf("[Trevor] Falló el golpe: %s", s.state.FailReason)
+			log.Printf("[Trevor] Golpe FALLÓ: %s", reason)
 			return &trevorpb.Ack{Msg: "Golpe fallido"}, nil
 		default:
 		}
@@ -134,6 +137,7 @@ func (s *trevorServer) StartHeist(ctx context.Context, r *trevorpb.StartHeistReq
 		s.mu.Unlock()
 		log.Printf("[Trevor] Turno %d/%d", t, s.turnsNeeded)
 	}
+
 	s.mu.Lock()
 	s.state.State = trevorpb.PhaseState_SUCCESS
 	s.mu.Unlock()
@@ -142,127 +146,81 @@ func (s *trevorServer) StartHeist(ctx context.Context, r *trevorpb.StartHeistReq
 	return &trevorpb.Ack{Msg: "Golpe completado con éxito."}, nil
 }
 
-//4
-func (s *trevorServer) GetLoot(ctx context.Context, _ *trevorpb.Empty) (*trevorpb.LootReply, error) {
+func (s *trevorServer) GetLoot(context.Context, *trevorpb.Empty) (*trevorpb.LootReply, error) {
 	s.mu.Lock()
-    defer s.mu.Unlock()
-    return &trevorpb.LootReply{TotalLoot: s.totalLoot}, nil
-
+	defer s.mu.Unlock()
+	return &trevorpb.LootReply{TotalLoot: s.totalLoot}, nil
 }
 
 func (s *trevorServer) ConfirmPayment(ctx context.Context, p *trevorpb.PaymentReq) (*trevorpb.PaymentReply, error) {
 	s.mu.Lock()
-	log.Printf("[Trevor]   Justo lo que esperaba! $%d", p.Amount)
 	defer s.mu.Unlock()
+	log.Printf("[Trevor] Pago recibido: $%d", p.Amount)
 	return &trevorpb.PaymentReply{
 		Ok:       true,
-		Response: fmt.Sprintf(" Justo lo que esperaba! $%d", p.Amount),
+		Response: fmt.Sprintf("Pago ok: $%d", p.Amount),
 	}, nil
 }
 
-
 func subscribeLesterStars(clientName string, starsCh chan<- int) {
-	exchangeName := "stars_exchange"
+	const exchangeName = "stars_exchange"
 	if err := amqpCh.ExchangeDeclare(exchangeName, "fanout", true, false, false, false, nil); err != nil {
-		log.Fatalf("Error declarando exchange %s: %v", exchangeName, err)
+		log.Fatalf("Exchange %s: %v", exchangeName, err)
 	}
-	q, err := amqpCh.QueueDeclare(
-		"",    //nombre vacío
-		false, //durable
-		true,  //auto-delete
-		true,  //exclusive
-		false, //no-wait
-		nil,
-	)
+	q, err := amqpCh.QueueDeclare("", false, true, true, false, nil)
 	if err != nil {
-		log.Fatalf("Error declarando cola temporal: %v", err)
+		log.Fatalf("QueueDeclare: %v", err)
 	}
-
-	err = amqpCh.QueueBind(
-		q.Name,
-		"",
-		exchangeName,
-		false,
-		nil,
-	)
+	if err := amqpCh.QueueBind(q.Name, "", exchangeName, false, nil); err != nil {
+		log.Fatalf("QueueBind: %v", err)
+	}
+	msgs, err := amqpCh.Consume(q.Name, "", true, false, false, false, nil)
 	if err != nil {
-		log.Fatalf("Error haciendo bind de la cola: %v", err)
+		log.Fatalf("Consume: %v", err)
 	}
-
-	msgs, err := amqpCh.Consume(
-		q.Name,
-		"",
-		true,
-		false,
-		false,
-		false,
-		nil,
-	)
-	if err != nil {
-		log.Fatalf("Error consumiendo mensajes: %v", err)
-	}
-
-	log.Printf("[%s] Suscrito a estrellas de Lester", clientName)
-
+	log.Printf("[%s] Suscrito a estrellas (exchange=%s queue=%s)", clientName, exchangeName, q.Name)
 	go func() {
 		for d := range msgs {
 			stars, err := strconv.Atoi(string(d.Body))
 			if err != nil {
-				log.Printf("[Trevor] Error convirtiendo estrellas: %v", err)
+				log.Printf("[Trevor] error parseando estrellas: %v", err)
 				continue
 			}
 			if stars == -1 {
-				log.Printf("[Trevor] Fin del golpe")
+				log.Printf("[Trevor] Fin del golpe (señal -1)")
 				close(starsCh)
 				return
 			}
-			log.Printf("[Trevor] Estado estrellas actual según Lester: %s", d.Body)
+			log.Printf("[%s] Estrellas=%d", clientName, stars)
 			starsCh <- stars
 		}
 	}()
 }
 
 func publishCrewTurn(member string, turn int) {
-	exchangeName := "turns_exchange"
-	err := amqpCh.ExchangeDeclare(
-		exchangeName,
-		"fanout",
-		true,
-		false,
-		false,
-		false,
-		nil,
-	)
-	if err != nil {
-		log.Fatalf("Error creando exchange %s: %v", exchangeName, err)
+	const exchangeName = "turns_exchange"
+	if err := amqpCh.ExchangeDeclare(exchangeName, "fanout", true, false, false, false, nil); err != nil {
+		log.Fatalf("Exchange %s: %v", exchangeName, err)
 	}
-
 	body := strconv.Itoa(turn)
-	err = amqpCh.Publish(
-		exchangeName,
-		"",
-		false,
-		false,
-		amqp.Publishing{
-			ContentType: "text/plain",
-			Body:        []byte(body),
-		},
-	)
-	if err != nil {
-		log.Printf("[%s] Error publicando turnos en %s: %v", member, member, err)
+	if err := amqpCh.Publish(exchangeName, "", false, false, amqp.Publishing{
+		ContentType: "text/plain",
+		Body:        []byte(body),
+	}); err != nil {
+		log.Printf("[%s] publish error: %v", member, err)
 	} else {
 		log.Printf("[%s] Notificando turno %d a Lester", member, turn)
 	}
 }
 
-func initRabbit() {
-	var _ error
-	amqpConn, amqpCh = connectRabbit()
-	log.Printf("[RabbitMQ] Conexión y canal inicializados")
-}
-
-// main
 func main() {
+	amqpURL = os.Getenv("AMQP_URL")
+	if amqpURL == "" {
+		amqpURL = "amqp://guest:guest@rabbitmq:5672/"
+	}
+	log.Printf("[Trevor] AMQP_URL=%s", amqpURL)
+	initRabbit(amqpURL)
+
 	port := os.Getenv("TREVOR_PORT")
 	if port == "" {
 		port = "50053"
@@ -271,13 +229,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("listen: %v", err)
 	}
-	initRabbit()
 	grpcServer := grpc.NewServer()
 	trevorpb.RegisterCrewServiceServer(grpcServer, &trevorServer{})
 	log.Printf("[Trevor] gRPC escuchando en :%s", port)
 	if err := grpcServer.Serve(lis); err != nil {
 		log.Fatal(err)
 	}
+	_ = amqpCh.Close()
+	_ = amqpConn.Close()
 }
 
 func TurnsNeeded(prob int32) int {
@@ -289,11 +248,7 @@ func TurnsNeeded(prob int32) int {
 	}
 	return int(200 - prob)
 }
-
-func TurnDuration() time.Duration {
-	return 80 * time.Millisecond
-}
-
+func TurnDuration() time.Duration { return 80 * time.Millisecond }
 func RandomPct(p int) bool {
 	if p <= 0 {
 		return false
