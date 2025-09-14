@@ -1,21 +1,19 @@
+cat > ~/V1/lester/compose.lester.yml <<'EOF'
+version: "3.9"
 services:
-  rabbitmq:
-    image: rabbitmq:3.13-management
-    container_name: rabbitmq
-    ports: ["5672:5672", "15672:15672"]
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-
   lester:
-    build:
-      context: ./lester     
+    build: .
     container_name: lester
-    depends_on:
-      rabbitmq:
-        condition: service_healthy
     environment:
-      AMQP_URL: "amqp://guest:guest@rabbitmq:5672/"
-    ports: ["50051:50051"]
+      # Rabbit corre en la MISMA VM en el contenedor "rabbitmq" y puerto interno 5672
+      AMQP_URL: "amqp://heist:heist123@rabbitmq:5672/"
+      LESTER_PORT: "50051"
+    ports:
+      - "50051:50051"
+    networks:
+      - heistnet
+
+networks:
+  heistnet:
+    external: true
+EOF
