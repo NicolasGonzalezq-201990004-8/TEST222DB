@@ -1,6 +1,21 @@
-docker-up:
-	docker compose -f compose.vm1.yml up -d
-docker-logs:
-	docker compose -f compose.vm1.yml logs -f lester rabbitmq
-docker-down:
-	docker compose -f compose.vm1.yml down
+cat > ~/V1/lester/Makefile <<'EOF'
+COMPOSE ?= docker-compose
+YML     ?= compose.lester.yml
+
+.PHONY: up build logs down ps
+
+build:
+	$(COMPOSE) -f $(YML) build
+
+up: build
+	$(COMPOSE) -f $(YML) up -d
+
+logs:
+	$(COMPOSE) -f $(YML) logs -f
+
+down:
+	$(COMPOSE) -f $(YML) down
+
+ps:
+	$(COMPOSE) -f $(YML) ps
+EOF
